@@ -1,4 +1,4 @@
-from textwrap import dedent
+﻿from textwrap import dedent
 
 tasks = []
 
@@ -7,17 +7,17 @@ def add_task(task_id, depends, what, acceptance, tests):
 
 add_task(1, [], "Scaffold repository with src/tests dirs, pyproject, Makefile, Streamlit + FastAPI entrypoints, README", "`make run` boots API on :8000 and UI on :8501 locally without errors", "`make test` placeholder passes on fresh clone")
 add_task(2, [1], "Define DuckDB schema DDL script and load demo parquet sample for SPY/QQQ/AAPL", "Running `python scripts/init_db.py --demo` creates tables trades_raw/nbbo_at_trade/trades_labeled/rollups_min/open_interest_eod and loads demo rows", "Unit `tests/test_schema.py` validates table existence and sample row counts")
-add_task(3, [1], "Implement ThetaData adapter package handling auth, WebSocket trade subscribe, REST helpers with retry/backoff", "`pytest tests/vendors/test_thetadata.py` passes and sample subscribe logs first trade", "Integration stub hitting mocked ThetaData server succeeds within 3 retries")
+add_task(3, [1], "Implement Polygon adapter package handling auth, WebSocket trade subscribe, REST helpers with retry/backoff", "`pytest tests/vendors/test_Polygon.py` passes and sample subscribe logs first trade", "Integration stub hitting mocked Polygon server succeeds within 3 retries")
 add_task(4, [3], "Build NBBO cache module storing latest bid/ask per option with expiry-aware keys and quote-at-trade fallback", "Simulated feed keeps cache hot for SPY contracts without stale misses beyond configured TTL", "Unit tests cover cache hit/miss, fallback REST call, and timestamp expiry")
 add_task(5, [4], "Create side classifier applying epsilon rule max(0.01 USD, 5 percent spread) with BUY/SELL/MID outputs", "Classifier matches expected labels for curated edge-case fixture set (mid prints, crossed markets)", "`pytest tests/classifiers/test_side_label.py` green with >95% branch coverage")
 add_task(6, [5], "Develop sweep clustering heuristic grouping same contract trades within 200ms and same side", "Replay of sample burst produces aggregated sweep IDs with consistent notional sums", "Unit tests feed synthetic bursts and assert cluster boundaries and totals")
 add_task(7, [2,6], "Implement per-minute rollup job writing to rollups_min and windowed CTE helpers", "Rolling query over last 60 minutes returns net premium totals matching manual calc within demo", "`pytest tests/services/test_rollups.py` passes including 5s refresh simulation")
 add_task(8, [7], "Expose FastAPI endpoints (/top,/prints,/ticker/{sym},/export.csv) with Pydantic models and SSE hook", "curl requests return JSON/CSV with filters applied and schema validated", "`pytest tests/api/test_endpoints.py::test_smoke_demo` succeeding against demo DB")
 add_task(9, [8], "Ship Streamlit UI page with live table, filters, prints feed, ticker detail drawer, CSV download button", "User can interactively filter demo data and download CSV containing same rows", "Playwright smoke in `tests/e2e/test_streamlit.py` confirms critical elements render")
-add_task(10, [2], "Write nightly EOD open interest fetcher updating open/close labels next day", "Scheduled run populates open_interest_eod with Theta sample and refreshes unusual flags", "Unit test mocks Theta client and verifies label transitions after job")
+add_task(10, [2], "Write nightly EOD open interest fetcher updating open/close labels next day", "Scheduled run populates open_interest_eod with polygon sample and refreshes unusual flags", "Unit test mocks polygon client and verifies label transitions after job")
 add_task(11, [1], "Add structured logging, rotation, ingest heartbeat, and FastAPI /health reporting queue depth", "`curl /health` returns JSON with `status: ok` and recent ingest timestamp", "`pytest tests/observability/test_health.py` exercises log formatting + heartbeat")
 add_task(12, [1], "Author Dockerfile (optional) and CI workflow running lint/type/test on push", "GitHub Actions run completes lint, mypy, pytest stages using docker image", "Local `act` or pipeline dry run passes with green checks")
-add_task(13, [2,8,9], "Implement offline demo mode wiring so API/UI serve seeded parquet without Theta credentials", "`make demo` starts API+UI using sample data and all dashboards render without external calls", "`pytest tests/e2e/test_demo_mode.py` runs against demo flag verifying endpoints and UI data")
+add_task(13, [2,8,9], "Implement offline demo mode wiring so API/UI serve seeded parquet without polygon credentials", "`make demo` starts API+UI using sample data and all dashboards render without external calls", "`pytest tests/e2e/test_demo_mode.py` runs against demo flag verifying endpoints and UI data")
 
 next_id = 14
 
@@ -42,7 +42,7 @@ categories = [
         'module_fmt': 'config/settings.py',
         'features': [
             'environment var parsing', 'default window values', 'symbol allowlist handling', 'batch size tuneable', 'NBBO cache TTL',
-            'epsilon override flag', 'demo mode toggle', 'theta credentials validation', 'logging level mapping', 'API pagination limits'
+            'epsilon override flag', 'demo mode toggle', 'polygon credentials validation', 'logging level mapping', 'API pagination limits'
         ],
         'tests_fmt': 'Use `pytest tests/config/test_settings.py::{test}` to confirm parsing.'
     },
@@ -50,7 +50,7 @@ categories = [
         'name': 'Vendor Adapter',
         'count': 70,
         'base': 3,
-        'module_fmt': 'vendors/thetadata/client.py',
+        'module_fmt': 'vendors/Polygon/client.py',
         'features': [
             'heartbeat handler', 'reconnect jitter', 'subscription ack parsing', 'trade schema validation', 'quote schema validation',
             'sequence gap detection', 'backoff multiplier tuning', 'auth token refresh', 'ping/pong monitor', 'rate-limit handling'
@@ -229,3 +229,4 @@ tasks.sort(key=lambda x: x[0])
 for task_id, depends, what, acceptance, tests in tasks:
     depends_str = '-' if not depends else '[' + ','.join(str(d) for d in depends) + ']'
     print(f"Task {task_id} (Depends: {depends_str}) What: {what}; Acceptance: {acceptance}; Tests: {tests}")
+

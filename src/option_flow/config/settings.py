@@ -34,8 +34,9 @@ class Settings(BaseSettings):
         extra='ignore',
     )
 
-    theta_api_key: str | None = None
-    theta_api_secret: str | None = None
+    polygon_api_key: str | None = None
+    polygon_ws_url: str = 'wss://socket.polygon.io/options'
+    polygon_rest_base_url: str = 'https://api.polygon.io'
     duckdb_path: DuckDBPath = Path('data/optionflow.duckdb')
     default_symbols: DefaultSymbols = ['SPY', 'QQQ', 'AAPL']
     window_minutes: int = 30

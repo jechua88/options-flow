@@ -26,6 +26,6 @@ src/option_flow/storage/duckdb_client.py
 src/option_flow/ui/__init__.py
 src/option_flow/ui/app.py
 src/option_flow/vendors/__init__.py
-src/option_flow/vendors/thetadata/__init__.py
-src/option_flow/vendors/thetadata/client.py
+src/option_flow/vendors/polygon/__init__.py
+src/option_flow/vendors/polygon/client.py
 tests/test_schema.py
