@@ -1,0 +1,71 @@
+Metadata-Version: 2.4
+Name: option-flow
+Version: 0.1.0
+Summary: Option flow MVP ingest, API, and dashboard
+Author-email: Jonathan <jonathan@example.com>
+License: Proprietary
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: duckdb>=0.10.4
+Requires-Dist: fastapi>=0.111.0
+Requires-Dist: uvicorn[standard]>=0.30.0
+Requires-Dist: streamlit>=1.35.0
+Requires-Dist: websockets>=11.0.3
+Requires-Dist: httpx>=0.27.0
+Requires-Dist: pydantic>=2.7.0
+Requires-Dist: pydantic-settings>=2.2.1
+Requires-Dist: pandas>=2.2.0
+Requires-Dist: python-dotenv>=1.0.1
+Requires-Dist: apscheduler>=3.10.4
+Requires-Dist: rich>=13.7.0
+Provides-Extra: dev
+Requires-Dist: pytest>=8.2.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.23.6; extra == "dev"
+Requires-Dist: pytest-cov>=5.0.0; extra == "dev"
+Requires-Dist: mypy>=1.9.0; extra == "dev"
+Requires-Dist: ruff>=0.3.0; extra == "dev"
+Requires-Dist: types-requests; extra == "dev"
+Requires-Dist: types-python-dateutil; extra == "dev"
+Provides-Extra: dynamic
+
+﻿# Option Flow MVP
+
+Option Flow MVP ingests ThetaData options trades into DuckDB, exposes FastAPI endpoints, and renders a Streamlit dashboard for recent premium flow.
+
+## Requirements
+- Python 3.11+
+- DuckDB 0.10+
+
+## Setup
+1. Create virtualenv and install deps:
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .[dev]
+```
+2. Copy `.env.example` to `.env` and fill in ThetaData credentials (not required for demo mode).
+3. Initialize DuckDB and demo data:
+```bash
+python scripts/init_db.py --demo
+```
+
+## Make Targets
+- `make run` – start ingest worker, API (port 8000), and Streamlit UI (port 8501).
+- `make api` – run API only.
+- `make ui` – run Streamlit UI only.
+- `make ingest` – run ingest worker.
+- `make demo` – start API + UI pointed at offline demo dataset.
+- `make test` – execute unit tests.
+- `make lint` – run Ruff and mypy.
+
+## Demo Mode
+Use `make demo` or set `demo_mode=true` in `.env` to explore recorded SPY/QQQ/AAPL trades without external connectivity.
+
+## Project Layout
+- `src/option_flow` – application modules (ingest, services, api, ui, storage).
+- `data/` – DuckDB database and parquet samples (gitignored).
+- `tests/` – unit and e2e smoke suites.
+- `scripts/` – CLI helpers.
+
+## Licensing
+Market data requires ThetaData license; no scraping.

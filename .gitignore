@@ -1,0 +1,35 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.dylib
+
+# Environments
+.env
+.venv/
+venv/
+.env.local
+
+# Data & logs
+/data/*.duckdb
+/data/*.parquet
+/logs/
+
+# Cache
+*.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Streamlit
+.streamlit/
+
+# Misc
+.DS_Store
+*~
