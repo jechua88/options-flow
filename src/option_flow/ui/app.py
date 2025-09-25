@@ -1,18 +1,19 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import os
 from functools import lru_cache
 from typing import Any
 
-import httpx
 import pandas as pd
 import streamlit as st
 
 from option_flow.config.settings import get_settings
+from option_flow.ui.client import APIClient
 
 API_BASE = os.getenv("OPTION_FLOW_API_BASE", "http://localhost:8000")
 WINDOW_OPTIONS = ["5m", "15m", "30m", "60m", "560m"]
 CALL_PUT_OPTIONS = {"Mixed": "both", "Calls": "calls", "Puts": "puts"}
+API_CLIENT = APIClient(API_BASE)
 
 
 @lru_cache(maxsize=1)
@@ -20,32 +21,40 @@ def settings_cached() -> Any:
     return get_settings()
 
 
-def get_client() -> httpx.Client:
-    return httpx.Client(timeout=5.0)
+def fetch_health() -> dict[str, Any]:
+    try:
+        return API_CLIENT.json("/health")
+    except Exception:
+        return {}
 
 
 def fetch_json(path: str, params: dict[str, Any] | None = None) -> Any:
-    url = f"{API_BASE}{path}"
-    with get_client() as client:
-        response = client.get(url, params=params)
-        response.raise_for_status()
-        return response.json()
+    return API_CLIENT.json(path, params=params)
 
 
 def fetch_csv(path: str, params: dict[str, Any] | None = None) -> bytes:
-    url = f"{API_BASE}{path}"
-    with get_client() as client:
-        response = client.get(url, params=params)
-        response.raise_for_status()
-        return response.content
+    return API_CLIENT.bytes(path, params=params)
 
 
 st.set_page_config(page_title="Option Flow", layout="wide")
 st.title("Option Flow Dashboard")
 settings = settings_cached()
+health = fetch_health()
 
-if settings.demo_mode or os.getenv("OPTION_FLOW_DEMO_MODE", "").lower() in {"1", "true", "yes"}:
-    st.info("Demo mode active – displaying recorded trade sample.")
+if health:
+    status = health.get("status", "unknown")
+    st.caption(f"API status: {status}")
+    recent = health.get("recent_trades_5m")
+    if recent is not None:
+        st.metric("Trades last 5 min", recent)
+else:
+    st.error("API is unreachable at the moment.")
+
+if health.get("demo_mode", settings.demo_mode) or os.getenv("OPTION_FLOW_DEMO_MODE", "").lower() in {"1", "true", "yes"}:
+    st.info("Demo mode active - displaying recorded trade sample.")
+
+if not health.get("ingest_enabled", True):
+    st.warning("Live ingest loop is disabled; data may be stale.")
 
 if callable(getattr(st, "autorefresh", None)):
     st.autorefresh(interval=1000, key="auto-refresh")
@@ -66,7 +75,7 @@ params = {
 
 try:
     table_data = fetch_json("/top", params=params)
-except httpx.HTTPError as exc:  # type: ignore[attr-defined]
+except Exception as exc:  # pragma: no cover - UI path
     st.error(f"Failed to load table data: {exc}")
     table_data = []
 
@@ -83,7 +92,7 @@ with col_left:
     st.subheader("Large Prints")
     try:
         prints = fetch_json("/prints", params={"min_notional": max(min_notional, 250000)})
-    except httpx.HTTPError as exc:  # type: ignore[attr-defined]
+    except Exception as exc:  # pragma: no cover - UI path
         st.error(f"Failed to load prints: {exc}")
         prints = []
 
@@ -101,7 +110,7 @@ with col_right:
 
     try:
         detail = fetch_json(f"/ticker/{selected_symbol}", params={"window": window})
-    except httpx.HTTPError as exc:  # type: ignore[attr-defined]
+    except Exception as exc:  # pragma: no cover
         st.error(f"Failed to load ticker detail: {exc}")
         detail = None
 
@@ -120,11 +129,11 @@ with col_right:
         if strikes:
             st.markdown("**Top Strikes:**")
             for strike in strikes:
-                st.write(f"• {strike}")
+                st.write(f"� {strike}")
 
 try:
     csv_bytes = fetch_csv("/export.csv", params=params)
-except httpx.HTTPError as exc:  # type: ignore[attr-defined]
+except Exception as exc:  # pragma: no cover - UI path
     st.error(f"Failed to generate CSV: {exc}")
     csv_bytes = b""
 
