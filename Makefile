@@ -1,6 +1,6 @@
 PYTHON ?= python
 
-.PHONY: install run api ui ingest demo test lint typecheck fmt schema launcher desktop
+.PHONY: install run api ui ingest demo test test-unit test-integration lint typecheck fmt schema launcher desktop desktop-package
 
 install:
 	$(PYTHON) -m pip install -e .[dev]
@@ -23,6 +23,12 @@ demo:
 test:
 	pytest
 
+test-unit:
+	pytest -m "not integration"
+
+test-integration:
+	pytest -m integration
+
 lint:
 	$(PYTHON) -m ruff check .
 	$(PYTHON) -m mypy src
@@ -41,4 +47,6 @@ launcher:
 
 desktop:
 	$(PYTHON) -m option_flow.desktop.app
-\ndesktop-package:\n\tpyinstaller --clean --noconfirm desktop/option_flow_desktop.spec\n
+
+desktop-package:
+	pyinstaller --clean --noconfirm desktop/option_flow_desktop.spec

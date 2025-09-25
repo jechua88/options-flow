@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 from option_flow.api.main import app
+
+pytestmark = [pytest.mark.integration, pytest.mark.usefixtures("integration_db")]
 
 
 def test_top_endpoint_returns_rows():
@@ -22,7 +25,6 @@ def test_export_csv_returns_payload():
     assert 'symbol' in response.text
 
 
-
 def test_health_reports_ingest_fields():
     client = TestClient(app)
     response = client.get('/health')
@@ -30,4 +32,4 @@ def test_health_reports_ingest_fields():
     data = response.json()
     assert 'ingest_subscribed_symbols' in data
     assert 'last_trade_utc' in data
-
+    assert 'recent_trades_5m' in data

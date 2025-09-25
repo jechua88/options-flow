@@ -6,6 +6,8 @@ import duckdb
 import pytest
 
 from option_flow.config import settings
+pytestmark = [pytest.mark.integration, pytest.mark.usefixtures("integration_db")]
+
 from option_flow.ingest.live import DuckDBWriter, TradeEventProcessor
 
 

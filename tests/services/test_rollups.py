@@ -1,7 +1,11 @@
-﻿from __future__ import annotations
+from __future__ import annotations
+
+import pytest
 
 from option_flow.services.rollups import RollupService
 from option_flow.storage.duckdb_client import query_df
+
+pytestmark = [pytest.mark.integration, pytest.mark.usefixtures("integration_db")]
 
 
 def test_rollup_service_refreshes_data():

@@ -29,6 +29,8 @@ python scripts/init_db.py --demo
 - `make ingest` – launch the ingest worker (placeholder until Polygon stream wiring lands).
 - `make demo` – start API + UI in demo mode (no Polygon access required).
 - `make test` – run pytest suite.
+- `make test-unit` - run fast unit tests (skips integration).
+- `make test-integration` - run DB-backed integration tests.
 - `make lint` – run Ruff + mypy.
 
 ## Demo Mode

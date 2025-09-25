@@ -51,6 +51,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 minversion = "7.4"
 addopts = "-ra --strict-markers"
+markers = ["integration: tests requiring DuckDB or external services"]
 testpaths = ["tests"]
 
 [tool.mypy]
