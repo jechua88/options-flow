@@ -1,10 +1,10 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import date
 
 import pytest
 
-from option_flow.vendors.polygon import OptionContract, parse_option_symbol
+from option_flow.vendors.polygon import OptionContract, PolygonClient, parse_option_symbol
 
 
 def test_parse_option_symbol_basic() -> None:
@@ -26,3 +26,17 @@ def test_parse_option_symbol_put() -> None:
 def test_parse_option_symbol_invalid(bad_symbol: str) -> None:
     with pytest.raises(ValueError):
         parse_option_symbol(bad_symbol)
+
+
+
+def test_build_channel_params_default():
+    client = PolygonClient(api_key='test-key', ws_url='wss://example.org', rest_base_url='https://example.org')
+    assert client._build_channel_params([]) == 'T.O:*,Q.O:*'
+
+
+
+def test_build_channel_params_custom():
+    client = PolygonClient(api_key='test-key', ws_url='wss://example.org', rest_base_url='https://example.org')
+    params = client._build_channel_params(['O:spy123', ' O:qqq456 '])
+    assert params == 'T.O:SPY123,Q.O:SPY123,T.O:QQQ456,Q.O:QQQ456'
+

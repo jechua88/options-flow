@@ -1,9 +1,8 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
-from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
 from option_flow.config.settings import get_settings
 
@@ -13,6 +12,8 @@ class NBBOQuote:
     bid: float
     ask: float
     timestamp: datetime
+    bid_size: int | None = None
+    ask_size: int | None = None
 
     @property
     def mid(self) -> float:
@@ -29,8 +30,23 @@ class NBBOCache:
     def _ttl(self) -> timedelta:
         return timedelta(seconds=self._settings.nbbo_cache_ttl_seconds)
 
-    def upsert(self, contract: str, bid: float, ask: float, timestamp: datetime) -> None:
-        self._store[contract] = NBBOQuote(bid=bid, ask=ask, timestamp=timestamp)
+    def upsert(
+        self,
+        contract: str,
+        bid: float,
+        ask: float,
+        timestamp: datetime,
+        *,
+        bid_size: int | None = None,
+        ask_size: int | None = None,
+    ) -> None:
+        self._store[contract] = NBBOQuote(
+            bid=bid,
+            ask=ask,
+            timestamp=timestamp,
+            bid_size=bid_size,
+            ask_size=ask_size,
+        )
 
     def get(self, contract: str, *, now: Optional[datetime] = None) -> Optional[NBBOQuote]:
         quote = self._store.get(contract)

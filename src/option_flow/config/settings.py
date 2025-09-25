@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import os
 from functools import lru_cache
@@ -17,6 +17,12 @@ def _parse_symbols(value: Any) -> list[str]:
     raise TypeError('default_symbols must be a comma string or list')
 
 
+def _parse_optional_symbols(value: Any) -> list[str] | None:
+    if value in (None, '', []):
+        return None
+    return _parse_symbols(value)
+
+
 def _parse_path(value: Any) -> Path:
     if isinstance(value, Path):
         return value
@@ -24,6 +30,7 @@ def _parse_path(value: Any) -> Path:
 
 
 DefaultSymbols = Annotated[list[str], BeforeValidator(_parse_symbols)]
+OptionalSymbols = Annotated[list[str] | None, BeforeValidator(_parse_optional_symbols)]
 DuckDBPath = Annotated[Path, BeforeValidator(_parse_path)]
 
 
@@ -37,6 +44,7 @@ class Settings(BaseSettings):
     polygon_api_key: str | None = None
     polygon_ws_url: str = 'wss://socket.polygon.io/options'
     polygon_rest_base_url: str = 'https://api.polygon.io'
+    polygon_stream_symbols: OptionalSymbols = None
     duckdb_path: DuckDBPath = Path('data/optionflow.duckdb')
     default_symbols: DefaultSymbols = ['SPY', 'QQQ', 'AAPL']
     window_minutes: int = 30
@@ -75,3 +83,4 @@ class Settings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
+

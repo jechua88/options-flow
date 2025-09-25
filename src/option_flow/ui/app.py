@@ -47,7 +47,8 @@ settings = settings_cached()
 if settings.demo_mode or os.getenv("OPTION_FLOW_DEMO_MODE", "").lower() in {"1", "true", "yes"}:
     st.info("Demo mode active – displaying recorded trade sample.")
 
-st.autorefresh(interval=1000, key="auto-refresh")
+if callable(getattr(st, "autorefresh", None)):
+    st.autorefresh(interval=1000, key="auto-refresh")
 
 with st.sidebar:
     st.header("Filters")

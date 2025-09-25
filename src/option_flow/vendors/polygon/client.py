@@ -1,6 +1,8 @@
 ﻿from __future__ import annotations
 
+import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from datetime import date
@@ -72,12 +74,17 @@ class PolygonClient:
         ws_url: str | None = None,
         rest_base_url: str | None = None,
         session_factory: Callable[[], httpx.AsyncClient] | None = None,
+        idle_timeout: float | None = None,
+        ping_timeout: float | None = None,
     ) -> None:
         settings = get_settings()
         self._api_key = api_key or getattr(settings, "polygon_api_key", None)
         self._ws_url = ws_url or settings.polygon_ws_url
         self._rest_base_url = rest_base_url or settings.polygon_rest_base_url
         self._session_factory = session_factory or (lambda: httpx.AsyncClient(timeout=10.0))
+        self._idle_timeout = idle_timeout or 30.0
+        self._ping_timeout = ping_timeout or 10.0
+        self._log = logging.getLogger(__name__)
 
     async def stream_trades(self, symbols: list[str]) -> AsyncIterator[dict[str, Any]]:
         """Yield Polygon trade/quote messages for the provided option symbols."""
@@ -86,21 +93,38 @@ class PolygonClient:
             raise RuntimeError("Polygon API key not configured")
 
         channel_params = self._build_channel_params(symbols)
-        async with websockets.connect(self._ws_url, ping_interval=20, ping_timeout=20) as ws:
+        async with websockets.connect(self._ws_url, ping_interval=None) as ws:
             await ws.send(json.dumps({"action": "auth", "params": self._api_key}))
             await ws.send(json.dumps({"action": "subscribe", "params": channel_params}))
 
-            async for message in ws:
-                payload = json.loads(message)
+            while True:
+                try:
+                    message = await asyncio.wait_for(ws.recv(), timeout=self._idle_timeout)
+                except asyncio.TimeoutError:
+                    pong_waiter = await ws.ping()
+                    try:
+                        await asyncio.wait_for(pong_waiter, timeout=self._ping_timeout)
+                    except asyncio.TimeoutError as exc:
+                        self._log.warning("Polygon ping timeout after %.1fs; reconnecting", self._ping_timeout)
+                        raise RuntimeError("Polygon ping timeout") from exc
+                    continue
+                try:
+                    payload = json.loads(message)
+                except json.JSONDecodeError:
+                    self._log.debug("Failed to decode Polygon message: %s", message)
+                    continue
                 yield payload
 
     def _build_channel_params(self, symbols: list[str]) -> str:
         if not symbols:
-            return "T.O.*,Q.O.*"
+            return "T.O:*,Q.O:*"
         params: list[str] = []
         for symbol in symbols:
-            params.append(f"T.O.{symbol}")
-            params.append(f"Q.O.{symbol}")
+            cleaned = symbol.strip().upper()
+            if not cleaned:
+                continue
+            params.append(f"T.{cleaned}")
+            params.append(f"Q.{cleaned}")
         return ",".join(params)
 
     async def fetch_open_interest(self, underlying: str, *, as_of: date) -> list[dict[str, Any]]:

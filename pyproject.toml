@@ -35,6 +35,10 @@ dev = [
   "types-requests",
   "types-python-dateutil"
 ]
+desktop = [
+  "PySimpleGUI>=4.60.5",
+  'pywin32>=306; platform_system == "Windows"'
+]
 
 dynamic = []
 

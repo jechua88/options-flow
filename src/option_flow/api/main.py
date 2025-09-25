@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from io import StringIO
 
 import pandas as pd
+from typing import Any
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -68,6 +69,18 @@ def parse_call_put_filter(value: str) -> str:
         raise HTTPException(status_code=400, detail=f"Invalid put/call filter '{value}'")
     return value
 
+
+
+def get_last_trade_timestamp() -> datetime | None:
+    df = query_df("SELECT max(trade_ts_utc) AS last_trade FROM trades_labeled")
+    if df.empty:
+        return None
+    value = df.iloc[0]["last_trade"]
+    if pd.isna(value):
+        return None
+    if isinstance(value, pd.Timestamp):
+        return value.to_pydatetime()
+    return value
 
 def load_window_trades(minutes: int) -> pd.DataFrame:
     cutoff_expr = f"now() - INTERVAL {minutes} MINUTE"
@@ -135,8 +148,16 @@ def summarize_symbols(df: pd.DataFrame) -> list[TableRow]:
 
 
 @app.get("/health")
-def health(settings: Settings = Depends(get_settings)) -> dict[str, str | bool]:
-    return {"status": "ok", "demo_mode": settings.demo_mode}
+def health(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
+    last_trade = get_last_trade_timestamp()
+    subscribed = list(settings.polygon_stream_symbols or [])
+    return {
+        "status": "ok",
+        "demo_mode": settings.demo_mode,
+        "ingest_enabled": not settings.demo_mode,
+        "ingest_subscribed_symbols": subscribed,
+        "last_trade_utc": last_trade.isoformat() if last_trade else None,
+    }
 
 
 @app.get("/top", response_model=list[TableRow])

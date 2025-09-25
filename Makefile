@@ -1,6 +1,6 @@
-﻿PYTHON ?= python
+PYTHON ?= python
 
-.PHONY: install run api ui ingest demo test lint typecheck fmt schema
+.PHONY: install run api ui ingest demo test lint typecheck fmt schema launcher desktop
 
 install:
 	$(PYTHON) -m pip install -e .[dev]
@@ -35,3 +35,10 @@ fmt:
 
 schema:
 	$(PYTHON) scripts/init_db.py --demo
+
+launcher:
+	$(PYTHON) -m option_flow.launcher.cli
+
+desktop:
+	$(PYTHON) -m option_flow.desktop.app
+\ndesktop-package:\n\tpyinstaller --clean --noconfirm desktop/option_flow_desktop.spec\n

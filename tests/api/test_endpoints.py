@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
@@ -20,3 +20,14 @@ def test_export_csv_returns_payload():
     assert response.status_code == 200
     assert response.headers['content-type'].startswith('text/csv')
     assert 'symbol' in response.text
+
+
+
+def test_health_reports_ingest_fields():
+    client = TestClient(app)
+    response = client.get('/health')
+    assert response.status_code == 200
+    data = response.json()
+    assert 'ingest_subscribed_symbols' in data
+    assert 'last_trade_utc' in data
+
