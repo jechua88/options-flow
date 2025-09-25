@@ -21,7 +21,7 @@ class DummyProcessor:
         return None
 
     def process_trade(self, event):  # pragma: no cover - simple stub
-        return False
+        return None
 
 
 @pytest.fixture(autouse=True)

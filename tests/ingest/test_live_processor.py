@@ -6,7 +6,7 @@ import duckdb
 import pytest
 
 from option_flow.config import settings
-from option_flow.ingest.live import TradeEventProcessor
+from option_flow.ingest.live import DuckDBWriter, TradeEventProcessor
 
 
 def _connect_db() -> duckdb.DuckDBPyConnection:
@@ -16,6 +16,7 @@ def _connect_db() -> duckdb.DuckDBPyConnection:
 
 def test_process_trade_inserts_rows():
     processor = TradeEventProcessor(allowed_underlyings={"SPY"})
+    writer = DuckDBWriter()
 
     quote_ts = datetime(2025, 1, 16, 14, 0, tzinfo=timezone.utc)
     quote_event = {
@@ -39,7 +40,9 @@ def test_process_trade_inserts_rows():
         "t": int(trade_ts.timestamp() * 1000),
     }
 
-    assert processor.process_trade(trade_event) is True
+    payload = processor.process_trade(trade_event)
+    assert payload is not None
+    writer.insert_batch([payload])
 
     con = _connect_db()
     raw_row = con.execute(
@@ -79,6 +82,7 @@ def test_process_trade_inserts_rows():
 
 def test_duplicate_trade_ignored():
     processor = TradeEventProcessor(allowed_underlyings={"SPY"})
+    writer = DuckDBWriter()
     trade_ts = datetime(2025, 1, 16, 15, 0, tzinfo=timezone.utc)
     trade_event = {
         "ev": "T",
@@ -93,14 +97,18 @@ def test_duplicate_trade_ignored():
     initial_count = con.execute("SELECT COUNT(*) FROM trades_raw").fetchone()[0]
     con.close()
 
-    assert processor.process_trade(trade_event) is True
+    payload = processor.process_trade(trade_event)
+    assert payload is not None
+    writer.insert_batch([payload])
 
     con = _connect_db()
     after_first = con.execute("SELECT COUNT(*) FROM trades_raw").fetchone()[0]
     assert after_first == initial_count + 1
     con.close()
 
-    assert processor.process_trade(trade_event) is False
+    payload_dup = processor.process_trade(trade_event)
+    assert payload_dup is not None
+    writer.insert_batch([payload_dup])
 
     con = _connect_db()
     after_second = con.execute("SELECT COUNT(*) FROM trades_raw").fetchone()[0]

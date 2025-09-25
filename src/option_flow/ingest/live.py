@@ -4,10 +4,13 @@ import asyncio
 import json
 import logging
 import random
+import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, List, Sequence
 
 import duckdb
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from option_flow.config.settings import get_settings
 from option_flow.ingest.nbbo_cache import NBBOCache
@@ -20,38 +23,66 @@ LOGGER = logging.getLogger(__name__)
 CONTRACT_MULTIPLIER = 100
 
 
+class PolygonTrade(BaseModel):
+    ev: str
+    sym: str
+    p: float
+    s: int
+    t: int
+    i: str | None = None
+    q: int | None = Field(default=None, alias="q")
+    seq: int | None = Field(default=None, alias="seq")
+
+    model_config = ConfigDict(extra="allow")
+
+
+class PolygonQuote(BaseModel):
+    ev: str
+    sym: str
+    bp: float
+    ap: float
+    t: int
+    bid_size: int | None = Field(default=None, alias="bs")
+    ask_size: int | None = Field(default=None, alias="as")
+
+    model_config = ConfigDict(extra="allow")
+
+
+@dataclass(slots=True)
+class PersistPayload:
+    raw: Sequence[Any]
+    labeled: Sequence[Any]
+    nbbo: Sequence[Any] | None
+
+
 class DuckDBWriter:
     """Persist trade and quote context rows into DuckDB."""
 
     _RAW_SQL = (
-        "INSERT INTO trades_raw (vendor_trade_id, symbol, expiry, strike, call_put, "
+        "INSERT OR IGNORE INTO trades_raw (vendor_trade_id, symbol, expiry, strike, call_put, "
         "trade_ts_utc, price, size, notional, raw_payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     _LABELED_SQL = (
-        "INSERT INTO trades_labeled (vendor_trade_id, symbol, expiry, strike, call_put, "
+        "INSERT OR REPLACE INTO trades_labeled (vendor_trade_id, symbol, expiry, strike, call_put, "
         "trade_ts_utc, price, size, notional, premium, epsilon_used, side, is_0dte, "
         "sweep_id, nbbo_bid, nbbo_ask) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     _NBBO_SQL = (
-        "INSERT INTO nbbo_at_trade (vendor_trade_id, bid, ask, mid, bid_size, ask_size, nbbo_ts) "
+        "INSERT OR REPLACE INTO nbbo_at_trade (vendor_trade_id, bid, ask, mid, bid_size, ask_size, nbbo_ts) "
         "VALUES (?, ?, ?, ?, ?, ?, ?)"
     )
 
-    def insert_trade(
-        self,
-        raw_params: Sequence[Any],
-        labeled_params: Sequence[Any],
-        nbbo_params: Sequence[Any] | None,
-    ) -> bool:
+    def insert_batch(self, payloads: Sequence[PersistPayload]) -> None:
+        if not payloads:
+            return
         with get_connection(read_only=False) as con:
-            try:
-                con.execute(self._RAW_SQL, tuple(raw_params))
-            except duckdb.ConstraintException:
-                return False
-            con.execute(self._LABELED_SQL, tuple(labeled_params))
-            if nbbo_params is not None:
-                con.execute(self._NBBO_SQL, tuple(nbbo_params))
-        return True
+            raw_rows = [payload.raw for payload in payloads]
+            labeled_rows = [payload.labeled for payload in payloads]
+            nbbo_rows = [payload.nbbo for payload in payloads if payload.nbbo is not None]
+            con.executemany(self._RAW_SQL, raw_rows)
+            con.executemany(self._LABELED_SQL, labeled_rows)
+            if nbbo_rows:
+                con.executemany(self._NBBO_SQL, nbbo_rows)
 
 
 class TradeEventProcessor:
@@ -63,7 +94,6 @@ class TradeEventProcessor:
         allowed_underlyings: Iterable[str] | None = None,
         nbbo_cache: NBBOCache | None = None,
         sweep_clusterer: SweepClusterer | None = None,
-        writer: DuckDBWriter | None = None,
         contract_multiplier: int = CONTRACT_MULTIPLIER,
     ) -> None:
         self._allowed_underlyings = (
@@ -73,74 +103,61 @@ class TradeEventProcessor:
         )
         self._nbbo_cache = nbbo_cache or NBBOCache()
         self._sweeps = sweep_clusterer or SweepClusterer()
-        self._writer = writer or DuckDBWriter()
         self._contract_multiplier = contract_multiplier
         self._log = logging.getLogger(__name__)
 
     def process_quote(self, event: dict[str, Any]) -> None:
-        symbol = event.get("sym")
-        if not symbol:
-            return
-        bid = event.get("bp")
-        ask = event.get("ap")
-        timestamp_ms = event.get("t")
-        if bid is None or ask is None or timestamp_ms is None:
-            return
         try:
-            bid_f = float(bid)
-            ask_f = float(ask)
-            timestamp = datetime.fromtimestamp(int(timestamp_ms) / 1000.0, tz=timezone.utc)
-        except (TypeError, ValueError, OverflowError):
+            quote = PolygonQuote.model_validate(event)
+        except ValidationError:
+            self._log.debug("Invalid quote payload skipped: %s", event)
             return
-        bid_size_raw = event.get("bs")
-        ask_size_raw = event.get("as")
-        bid_size = int(bid_size_raw) if isinstance(bid_size_raw, (int, float)) else None
-        ask_size = int(ask_size_raw) if isinstance(ask_size_raw, (int, float)) else None
+        symbol = quote.sym
+        bid = float(quote.bp)
+        ask = float(quote.ap)
+        timestamp = datetime.fromtimestamp(int(quote.t) / 1000.0, tz=timezone.utc)
+        bid_size = int(quote.bid_size) if isinstance(quote.bid_size, (int, float)) else None
+        ask_size = int(quote.ask_size) if isinstance(quote.ask_size, (int, float)) else None
         self._nbbo_cache.upsert(
             symbol,
-            bid_f,
-            ask_f,
+            bid,
+            ask,
             timestamp,
             bid_size=bid_size,
             ask_size=ask_size,
         )
         self._nbbo_cache.bulk_expire(now=timestamp)
 
-    def process_trade(self, event: dict[str, Any]) -> bool:
-        symbol = event.get("sym")
+    def process_trade(self, event: dict[str, Any]) -> PersistPayload | None:
+        try:
+            trade = PolygonTrade.model_validate(event)
+        except ValidationError:
+            self._log.debug("Invalid trade payload skipped: %s", event)
+            return None
+        symbol = trade.sym
         if not symbol:
-            return False
+            return None
         try:
             contract = parse_option_symbol(symbol)
         except ValueError:
             self._log.debug("Skipping trade with unknown symbol %s", symbol)
-            return False
+            return None
 
         underlying = contract.underlying.upper()
         if self._allowed_underlyings and underlying not in self._allowed_underlyings:
-            return False
+            return None
 
-        price = event.get("p")
-        size = event.get("s")
-        timestamp_ms = event.get("t")
-        if price is None or size is None or timestamp_ms is None:
-            return False
-        try:
-            price_f = float(price)
-            size_i = int(size)
-            timestamp = datetime.fromtimestamp(int(timestamp_ms) / 1000.0, tz=timezone.utc)
-        except (TypeError, ValueError, OverflowError):
-            self._log.debug("Skipping trade with invalid numeric fields: %s", event)
-            return False
+        price_f = float(trade.p)
+        size_i = int(trade.s)
         if price_f <= 0 or size_i <= 0:
-            return False
-
+            return None
+        timestamp = datetime.fromtimestamp(int(trade.t) / 1000.0, tz=timezone.utc)
         self._nbbo_cache.bulk_expire(now=timestamp)
         quote = self._nbbo_cache.get(symbol, now=timestamp)
         side_result = infer_side(price_f, quote)
         sweep_id = self._sweeps.assign(symbol, side_result.side, timestamp)
 
-        vendor_trade_id = self._build_trade_id(event, symbol, timestamp_ms)
+        vendor_trade_id = self._build_trade_id(trade, symbol)
         notional = price_f * size_i * self._contract_multiplier
         raw_payload = json.dumps(event, separators=(",", ":"), sort_keys=True)
         nbbo_bid = float(quote.bid) if quote else None
@@ -187,18 +204,41 @@ class TradeEventProcessor:
                 quote.ask_size,
                 quote.timestamp,
             )
-        try:
-            return self._writer.insert_trade(raw_params, labeled_params, nbbo_params)
-        except duckdb.Error:
-            self._log.exception("Failed to persist trade event: %s", event)
-            return False
+        return PersistPayload(raw=raw_params, labeled=labeled_params, nbbo=nbbo_params)
 
-    def _build_trade_id(self, event: dict[str, Any], symbol: str, timestamp_ms: Any) -> str:
-        trade_id = event.get("i") or event.get("id")
-        if trade_id is not None:
-            return str(trade_id)
-        sequence = event.get("q") or event.get("seq") or event.get("sequence") or 0
-        return f"{symbol}-{timestamp_ms}-{sequence}"
+    def _build_trade_id(self, trade: PolygonTrade, symbol: str) -> str:
+        if trade.i is not None:
+            return str(trade.i)
+        sequence = trade.q or trade.seq or 0
+        return f"{symbol}-{trade.t}-{sequence}"
+
+
+class BatchWriter:
+    def __init__(self, writer: DuckDBWriter, *, max_batch_size: int = 200, flush_interval: float = 1.0) -> None:
+        self._writer = writer
+        self._max_batch_size = max_batch_size
+        self._flush_interval = flush_interval
+        self._pending: List[PersistPayload] = []
+        self._lock = asyncio.Lock()
+        self._last_flush = time.monotonic()
+
+    async def add(self, payload: PersistPayload) -> None:
+        async with self._lock:
+            self._pending.append(payload)
+            if len(self._pending) >= self._max_batch_size or (time.monotonic() - self._last_flush) >= self._flush_interval:
+                await self._flush_locked()
+
+    async def flush(self) -> None:
+        async with self._lock:
+            await self._flush_locked()
+
+    async def _flush_locked(self) -> None:
+        if not self._pending:
+            return
+        batch = list(self._pending)
+        self._pending.clear()
+        self._last_flush = time.monotonic()
+        await asyncio.to_thread(self._writer.insert_batch, batch)
 
 
 class LiveTradeService:
@@ -212,6 +252,8 @@ class LiveTradeService:
         symbols: Sequence[str] | None = None,
         reconnect_delay_seconds: int = 5,
         max_reconnect_delay_seconds: int = 60,
+        max_batch_size: int = 200,
+        flush_interval: float = 1.0,
     ) -> None:
         settings = get_settings()
         allowed = set(settings.default_symbols)
@@ -222,6 +264,7 @@ class LiveTradeService:
         self._base_reconnect_delay = float(reconnect_delay_seconds)
         self._max_reconnect_delay = max(float(max_reconnect_delay_seconds), self._base_reconnect_delay)
         self._log = logging.getLogger(__name__)
+        self._batch_writer = BatchWriter(DuckDBWriter(), max_batch_size=max_batch_size, flush_interval=flush_interval)
         if self._symbols:
             self._log.info("Subscribing to Polygon symbols: %s", ", ".join(self._symbols))
         else:
@@ -229,27 +272,31 @@ class LiveTradeService:
 
     async def run(self) -> None:
         delay = self._base_reconnect_delay
-        while True:
-            try:
-                async for payload in self._client.stream_trades(self._symbols):
-                    await self._handle_payload(payload)
+        try:
+            while True:
+                try:
+                    async for payload in self._client.stream_trades(self._symbols):
+                        await self._handle_payload(payload)
+                        delay = self._base_reconnect_delay
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    jitter = random.uniform(0.8, 1.2)
+                    sleep_for = min(delay * jitter, self._max_reconnect_delay)
+                    self._log.exception(
+                        "Polygon stream error; retrying in %.1f seconds",
+                        sleep_for,
+                    )
+                    await asyncio.sleep(sleep_for)
+                    delay = min(max(self._base_reconnect_delay, delay * 2), self._max_reconnect_delay)
+                else:
                     delay = self._base_reconnect_delay
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                jitter = random.uniform(0.8, 1.2)
-                sleep_for = min(delay * jitter, self._max_reconnect_delay)
-                self._log.exception(
-                    "Polygon stream error; retrying in %.1f seconds",
-                    sleep_for,
-                )
-                await asyncio.sleep(sleep_for)
-                delay = min(max(self._base_reconnect_delay, delay * 2), self._max_reconnect_delay)
-            else:
-                delay = self._base_reconnect_delay
+        finally:
+            await self._batch_writer.flush()
 
     async def _handle_payload(self, payload: Any) -> None:
         events = payload if isinstance(payload, list) else [payload]
+        trades: List[PersistPayload] = []
         for event in events:
             if not isinstance(event, dict):
                 continue
@@ -257,11 +304,15 @@ class LiveTradeService:
             if event_type == "Q":
                 self._processor.process_quote(event)
             elif event_type == "T":
-                await asyncio.to_thread(self._processor.process_trade, event)
+                result = self._processor.process_trade(event)
+                if result is not None:
+                    trades.append(result)
             elif event_type == "status":
                 self._log.debug("Polygon status update: %s", event)
             else:
                 self._log.debug("Unhandled Polygon event: %s", event)
+        for trade in trades:
+            await self._batch_writer.add(trade)
 
 
-__all__ = ["DuckDBWriter", "TradeEventProcessor", "LiveTradeService"]
+__all__ = ["DuckDBWriter", "TradeEventProcessor", "LiveTradeService", "BatchWriter", "PersistPayload"]
