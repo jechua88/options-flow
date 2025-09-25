@@ -31,6 +31,7 @@ python scripts/init_db.py --demo
 - `make test` – run pytest suite.
 - `make test-unit` - run fast unit tests (skips integration).
 - `make test-integration` - run DB-backed integration tests.
+- `make compose` - build and run API/UI/ingest via Docker Compose.
 - `make lint` – run Ruff + mypy.
 
 ## Demo Mode
@@ -47,15 +48,13 @@ Install the optional GUI dependencies with `pip install .[desktop]`, then launch
 ### Desktop Shortcut
 On Windows you can create a shortcut on your desktop by running `python -m option_flow.desktop.shortcut`. Use `--name` and `--log-file` options to customize the link; by default it points to your current Python interpreter and launches `python -m option_flow.desktop.app`.
 
+## Container & Deployment
+
+### Docker Compose
+Run `make compose` (or `docker compose up --build`) to launch the API, Streamlit UI, and ingest worker as separate services. The compose file mounts `./data` so DuckDB state persists on the host. Use environment overrides in `docker-compose.yml` to switch out of demo mode.
+
 ### Packaging
 To build a standalone desktop binary (requires PyInstaller), run `make desktop-package`. The output appears under `dist/option-flow-desktop`.
-
-### CLI Launcher
-Run `python -m option_flow.launcher.cli` to start the API, UI, and ingest worker together. Add `--demo` to use the bundled DuckDB sample or `--open-browser` to launch the dashboard automatically. Use `Ctrl+C` to stop all services.
-
-### Desktop App
-Install the optional GUI dependencies with `pip install .[desktop]`, then launch `python -m option_flow.desktop.app`. The desktop controller lets you toggle demo mode, start/stop services, and open the dashboard without touching a terminal.
-
 
 ## Project Layout
 - `src/option_flow` – application modules (ingest, services, api, ui, storage, vendors).

@@ -1,6 +1,6 @@
 PYTHON ?= python
 
-.PHONY: install run api ui ingest demo test test-unit test-integration lint typecheck fmt schema launcher desktop desktop-package
+.PHONY: install run api ui ingest demo test test-unit test-integration lint typecheck fmt schema launcher desktop desktop-package compose
 
 install:
 	$(PYTHON) -m pip install -e .[dev]
@@ -50,3 +50,6 @@ desktop:
 
 desktop-package:
 	pyinstaller --clean --noconfirm desktop/option_flow_desktop.spec
+
+compose:
+	docker compose up --build

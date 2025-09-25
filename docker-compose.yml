@@ -1,0 +1,38 @@
+version: "3.9"
+
+services:
+  api:
+    build:
+      context: .
+    command: python -m option_flow.api.main
+    environment:
+      OPTION_FLOW_DEMO_MODE: "true"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+
+  ui:
+    build:
+      context: .
+    command: python -m streamlit run src/option_flow/ui/app.py --server.address 0.0.0.0 --server.port 8501
+    environment:
+      OPTION_FLOW_API_BASE: http://api:8000
+      OPTION_FLOW_DEMO_MODE: "true"
+    ports:
+      - "8501:8501"
+    depends_on:
+      - api
+    volumes:
+      - ./data:/app/data
+
+  ingest:
+    build:
+      context: .
+    command: python -m option_flow.ingest.worker
+    environment:
+      OPTION_FLOW_DEMO_MODE: "true"
+    depends_on:
+      - api
+    volumes:
+      - ./data:/app/data
