@@ -69,3 +69,8 @@ CREATE TABLE IF NOT EXISTS open_interest_eod (
     open_interest BIGINT,
     PRIMARY KEY (symbol, expiry, strike, call_put, date)
 );
+CREATE INDEX IF NOT EXISTS idx_trades_labeled_symbol_ts ON trades_labeled(symbol, trade_ts_utc);
+CREATE INDEX IF NOT EXISTS idx_trades_labeled_ts ON trades_labeled(trade_ts_utc);
+CREATE INDEX IF NOT EXISTS idx_rollups_min_symbol_ts ON rollups_min(symbol, minute_bucket);
+
+

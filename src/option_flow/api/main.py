@@ -1,21 +1,53 @@
 ﻿from __future__ import annotations
 
+
 from datetime import datetime, timezone
 from io import StringIO
+from threading import Lock
+from time import monotonic
+from typing import Any, Callable, Hashable
 
 import pandas as pd
-from typing import Any
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from option_flow.config.settings import Settings, get_settings
-from option_flow.storage.duckdb_client import query_df
+from option_flow.storage.repository import DuckDBRepository
 
 app = FastAPI(title="Option Flow API", version="0.1.0")
 
+REPO = DuckDBRepository()
+
 WINDOW_OPTIONS: dict[str, int] = {"5m": 5, "15m": 15, "30m": 30, "60m": 60, "560m": 560}
 CALL_PUT_FILTER = {"both", "calls", "puts"}
+
+
+class TTLCache:
+    def __init__(self, ttl_seconds: float):
+        self._ttl = ttl_seconds
+        self._store: dict[Hashable, tuple[Any, float]] = {}
+        self._lock = Lock()
+
+    def get(self, key: Hashable, loader: Callable[[], Any]) -> Any:
+        now = monotonic()
+        with self._lock:
+            value = self._store.get(key)
+            if value and now < value[1]:
+                return value[0]
+        result = loader()
+        with self._lock:
+            self._store[key] = (result, now + self._ttl)
+        return result
+
+    def clear(self) -> None:
+        with self._lock:
+            self._store.clear()
+
+
+TABLE_CACHE = TTLCache(2.0)
+PRINTS_CACHE = TTLCache(1.0)
+TICKER_CACHE = TTLCache(2.0)
 
 
 class TableRow(BaseModel):
@@ -72,7 +104,7 @@ def parse_call_put_filter(value: str) -> str:
 
 
 def get_last_trade_timestamp() -> datetime | None:
-    df = query_df("SELECT max(trade_ts_utc) AS last_trade FROM trades_labeled")
+    df = REPO.fetch_df("SELECT max(trade_ts_utc) AS last_trade FROM trades_labeled")
     if df.empty:
         return None
     value = df.iloc[0]["last_trade"]
@@ -84,7 +116,7 @@ def get_last_trade_timestamp() -> datetime | None:
 
 def load_window_trades(minutes: int) -> pd.DataFrame:
     cutoff_expr = f"now() - INTERVAL {minutes} MINUTE"
-    return query_df(
+    return REPO.fetch_df(
         f"""
         SELECT *
         FROM trades_labeled
@@ -147,6 +179,128 @@ def summarize_symbols(df: pd.DataFrame) -> list[TableRow]:
     return rows
 
 
+def _load_top_flow(minutes: int, min_notional: float, call_put: str, zero_dte_only: bool) -> list[dict[str, Any]]:
+    df = load_window_trades(minutes)
+    if df.empty:
+        return []
+    if min_notional > 0:
+        df = df[df["notional"] >= min_notional]
+    if call_put != "both":
+        df = df[df["call_put"] == ("C" if call_put == "calls" else "P")]
+    if zero_dte_only:
+        df = df[df["is_0dte"]]
+    rows = summarize_symbols(df)
+    return [row.model_dump() for row in rows]
+
+
+def _load_prints(min_notional: float, limit: int) -> list[dict[str, Any]]:
+    df = REPO.fetch_df(
+        """
+        SELECT *
+        FROM trades_labeled
+        WHERE notional >= ?
+        ORDER BY trade_ts_utc DESC
+        LIMIT ?
+        """,
+        [min_notional, limit],
+    )
+    if df.empty:
+        return []
+    return [
+        {
+            "trade_id": row["vendor_trade_id"],
+            "trade_ts_utc": row["trade_ts_utc"],
+            "symbol": row["symbol"],
+            "option": f"{row['symbol']} {row['expiry']} {row['strike']:.2f}{row['call_put']}",
+            "price": float(row["price"]),
+            "size": int(row["size"]),
+            "notional": float(row["notional"]),
+            "side": row["side"],
+            "is_0dte": bool(row["is_0dte"]),
+            "sweep_id": row["sweep_id"] if row["sweep_id"] else None,
+        }
+        for _, row in df.iterrows()
+    ]
+
+
+def _load_ticker_detail(symbol: str, minutes: int) -> dict[str, Any]:
+    cutoff_expr = f"now() - INTERVAL {minutes} MINUTE"
+    df = REPO.fetch_df(
+        """
+        SELECT *
+        FROM trades_labeled
+        WHERE symbol = ? AND trade_ts_utc >= {cutoff_expr}
+        """,
+        [symbol],
+    )
+    if df.empty:
+        detail = TickerDetail(symbol=symbol, window_minutes=minutes, by_minute=[], largest_prints=[], top_strikes=[])
+        return detail.model_dump()
+
+    df["minute_bucket"] = pd.to_datetime(df["trade_ts_utc"]).dt.floor("min")
+    minute_totals = df.groupby("minute_bucket", as_index=True)["premium"].sum()
+
+    def minute_metric(mask: pd.Series) -> pd.Series:
+        return df[mask].groupby("minute_bucket")["premium"].sum()
+
+    buy = minute_metric(df["side"] == "BUY").reindex(minute_totals.index, fillna(0.0))
+    sell = minute_metric(df["side"] == "SELL").reindex(minute_totals.index, fillna(0.0))
+    call = minute_metric(df["call_put"] == "C").reindex(minute_totals.index, fillna(0.0))
+    put = minute_metric(df["call_put"] == "P").reindex(minute_totals.index, fillna(0.0))
+
+    by_minute = [
+        MinuteBar(
+            minute_bucket=index.to_pydatetime(),
+            buy_premium=float(buy.loc[index]),
+            sell_premium=float(sell.loc[index]),
+            call_premium=float(call.loc[index]),
+            put_premium=float(put.loc[index]),
+            total_premium=float(minute_totals.loc[index]),
+        )
+        for index in minute_totals.sort_index().index
+    ]
+
+    largest = (
+        df.sort_values("notional", ascending=False)
+        .head(10)
+        .apply(
+            lambda row: PrintRow(
+                trade_id=row["vendor_trade_id"],
+                trade_ts_utc=row["trade_ts_utc"],
+                symbol=row["symbol"],
+                option=f"{row['symbol']} {row['expiry']} {row['strike']:.2f}{row['call_put']}",
+                price=float(row["price"]),
+                size=int(row["size"]),
+                notional=float(row["notional"]),
+                side=row["side"],
+                is_0dte=bool(row["is_0dte"]),
+                sweep_id=row["sweep_id"] if row["sweep_id"] else None,
+            ),
+            axis=1,
+        )
+        .tolist()
+    )
+
+    strike_summary = (
+        df.groupby(["strike", "expiry", "call_put"], as_index=False)["premium"].sum()
+        .sort_values("premium", ascending=False)
+        .head(5)
+    )
+    strikes = [
+        f"{row['strike']:.2f}{row['call_put']} ({row['expiry']}): ${row['premium']:.0f}"
+        for _, row in strike_summary.iterrows()
+    ]
+
+    detail = TickerDetail(
+        symbol=symbol,
+        window_minutes=minutes,
+        by_minute=by_minute,
+        largest_prints=largest,
+        top_strikes=strikes,
+    )
+    return detail.model_dump()
+
+
 @app.get("/health")
 def health(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
     last_trade = get_last_trade_timestamp()
@@ -169,19 +323,9 @@ def top_flow(
 ) -> list[TableRow]:
     minutes = get_valid_window(window)
     call_put = parse_call_put_filter(call_put)
-
-    df = load_window_trades(minutes)
-    if df.empty:
-        return []
-
-    if min_notional > 0:
-        df = df[df["notional"] >= min_notional]
-    if call_put != "both":
-        df = df[df["call_put"] == ("C" if call_put == "calls" else "P")]
-    if zero_dte_only:
-        df = df[df["is_0dte"]]
-
-    return summarize_symbols(df)
+    cache_key = (minutes, float(min_notional), call_put, bool(zero_dte_only))
+    data = TABLE_CACHE.get(cache_key, lambda: _load_top_flow(minutes, min_notional, call_put, zero_dte_only))
+    return [TableRow.model_validate(item) for item in data]
 
 
 @app.get("/prints", response_model=list[PrintRow])
@@ -189,34 +333,9 @@ def prints_feed(
     min_notional: float = Query(250_000.0, ge=0.0),
     limit: int = Query(50, ge=1, le=500),
 ) -> list[PrintRow]:
-    df = query_df(
-        """
-        SELECT *
-        FROM trades_labeled
-        WHERE notional >= ?
-        ORDER BY trade_ts_utc DESC
-        LIMIT ?
-        """,
-        [min_notional, limit],
-    )
-    if df.empty:
-        return []
-
-    return [
-        PrintRow(
-            trade_id=row["vendor_trade_id"],
-            trade_ts_utc=row["trade_ts_utc"],
-            symbol=row["symbol"],
-            option=f"{row['symbol']} {row['expiry']} {row['strike']:.2f}{row['call_put']}",
-            price=float(row["price"]),
-            size=int(row["size"]),
-            notional=float(row["notional"]),
-            side=row["side"],
-            is_0dte=bool(row["is_0dte"]),
-            sweep_id=row["sweep_id"] if row["sweep_id"] else None,
-        )
-        for _, row in df.iterrows()
-    ]
+    cache_key = (float(min_notional), int(limit))
+    data = PRINTS_CACHE.get(cache_key, lambda: _load_prints(min_notional, limit))
+    return [PrintRow.model_validate(item) for item in data]
 
 
 @app.get("/ticker/{symbol}", response_model=TickerDetail)
