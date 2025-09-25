@@ -114,6 +114,12 @@ def get_last_trade_timestamp() -> datetime | None:
         return value.to_pydatetime()
     return value
 
+def get_recent_trade_count(minutes: int = 5) -> int:
+    result = REPO.fetch_one(f"SELECT count(*) FROM trades_labeled WHERE trade_ts_utc >= now() - INTERVAL {int(minutes)} MINUTE")
+    if not result:
+        return 0
+    return int(result[0])
+
 def load_window_trades(minutes: int) -> pd.DataFrame:
     cutoff_expr = f"now() - INTERVAL {minutes} MINUTE"
     return REPO.fetch_df(
@@ -311,6 +317,7 @@ def health(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
         "ingest_enabled": not settings.demo_mode,
         "ingest_subscribed_symbols": subscribed,
         "last_trade_utc": last_trade.isoformat() if last_trade else None,
+        "recent_trades_5m": get_recent_trade_count(5),
     }
 
 

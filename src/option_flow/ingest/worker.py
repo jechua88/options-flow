@@ -5,6 +5,7 @@ import logging
 
 from option_flow.config.settings import get_settings
 from option_flow.ingest.live import LiveTradeService
+from option_flow.observability.logging import configure_logging as setup_logging
 from option_flow.services.rollups import RollupService
 
 ROLLUP_INTERVAL_SECONDS = 5
@@ -20,11 +21,7 @@ async def rollup_loop() -> None:
 
 def configure_logging() -> None:
     settings = get_settings()
-    level = getattr(logging, settings.log_level.upper(), logging.INFO)
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-    )
+    setup_logging(settings.log_level)
 
 
 async def main() -> None:

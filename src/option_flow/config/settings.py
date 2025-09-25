@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import json
 import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any
 
-from pydantic import BeforeValidator
+from pydantic import BeforeValidator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -50,8 +51,15 @@ class Settings(BaseSettings):
     window_minutes: int = 30
     min_notional_usd: int = 250_000
     nbbo_cache_ttl_seconds: int = 30
-    demo_mode: bool = False
+    demo_mode: bool = True
     log_level: str = 'INFO'
+
+
+@model_validator(mode="after")
+def validate_polygon_config(cls, values):
+    if not values.demo_mode and not values.polygon_api_key:
+        raise ValidationError("polygon_api_key must be set when OPTION_FLOW_DEMO_MODE is false")
+    return values
 
     @classmethod
     def settings_customise_sources(
@@ -67,8 +75,21 @@ class Settings(BaseSettings):
             prefix = 'OPTION_FLOW_'
             plen = len(prefix)
             for key, value in os.environ.items():
-                if key.startswith(prefix):
-                    field_name = key[plen:].lower()
+                if not key.startswith(prefix):
+                    continue
+                field_name = key[plen:].lower()
+                # Remove handled keys to prevent default env source from re-processing them
+                os.environ.pop(key, None)
+                if field_name == 'default_symbols':
+                    parsed_symbols = _parse_symbols(value)
+                    data[field_name] = parsed_symbols
+                    os.environ[key] = json.dumps(parsed_symbols)
+                elif field_name == 'polygon_stream_symbols':
+                    parsed = _parse_optional_symbols(value)
+                    if parsed is not None:
+                        data[field_name] = parsed
+                        os.environ[key] = json.dumps(parsed)
+                else:
                     data[field_name] = value
             return data
 
